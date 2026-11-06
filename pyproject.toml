@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "envy-veil"
+version = "0.1.0"
+description = "ENVY Veil: hide an AES-256-GCM encrypted file inside a lossless image or audio carrier, in a native app window"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+  "cryptography>=42,<47",
+  "PyQt6>=6.7,<7",
+  "Pillow>=10,<12",
+]
+
+[project.scripts]
+envy-veil = "envy_veil.cli:main"
+
+[project.gui-scripts]
+envy-veil-gui = "envy_veil.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["envy_veil*"]
