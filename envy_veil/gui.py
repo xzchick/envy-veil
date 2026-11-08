@@ -261,7 +261,7 @@ def _build():
         def _show_preview(self, path):
             if path.suffix.lower() in core.AUDIO_SUFFIXES:
                 self.preview.setPixmap(QPixmap())
-                self.preview.setText(f"♪  Audio carrier\n{path.name}")
+                self.preview.setText(f"♪  Audio carrier\n{path.name}\n{path.stat().st_size:,} bytes")
                 return
             pix = QPixmap(str(path))
             if pix.isNull():
@@ -284,8 +284,9 @@ def _build():
             fits = used <= maxp
             color = GREEN if fits else PINK
             self.cap_bar.setStyleSheet(f"#cap::chunk{{background:{color};border-radius:5px;}}")
+            csize = self.hide_carrier.stat().st_size
             self.cap_lbl.setText(
-                f"Capacity: {maxp:,} bytes ({cap['kind']}).  "
+                f"Carrier: {csize:,} bytes.  Capacity: {maxp:,} bytes ({cap['kind']}).  "
                 + (f"Payload: {used:,} bytes — {'fits' if fits else 'TOO LARGE'}." if self.hide_payload
                    else "Choose a payload."))
             self.cap_lbl.setStyleSheet(f"#status{{color:{color if self.hide_payload else MUTED};}}")
