@@ -71,9 +71,9 @@ To get a file back, point Veil at the carrier and enter the passphrase: it reads
 
 A **standalone bundle** that needs no Python, or **pip** if you already have Python 3.10+.
 
-### Standalone bundle (no Python) — coming with v0.1.0
+### Standalone bundle (no Python)
 
-When the v0.1.0 release is published, download a bundle from **Releases**:
+Download a bundle from the [latest release](https://github.com/xzchick/envy-veil/releases/latest):
 
 | File | System | Run it |
 |---|---|---|
