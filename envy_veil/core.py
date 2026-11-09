@@ -26,6 +26,8 @@ from pathlib import Path
 
 MAGIC = b"ENVYVAULT2\x00"          # the AES envelope magic (byte-compatible with ENVY Vault)
 STEG_MAGIC = b"ENVYVEIL1"          # marks an embedded payload; followed by a 4-byte length
+BUNDLE_MAGIC = b"ENVYBNDL1"        # marks a multi-file bundle inside the decrypted payload
+MAX_BUNDLE_FILES = 256
 MIN_PASSPHRASE = 12
 MAX_PAYLOAD = 64 * 1024 * 1024     # 64 MiB plaintext payload ceiling
 MAX_CARRIER = 256 * 1024 * 1024    # 256 MiB carrier ceiling
@@ -109,6 +111,53 @@ def _bits(data: bytes):
 def _frame(payload: bytes) -> bytes:
     """STEG_MAGIC + u32 length + payload, the exact run of bytes written to LSBs."""
     return STEG_MAGIC + struct.pack(">I", len(payload)) + payload
+
+
+def _safe_bundle_name(name: str) -> str:
+    """A plain filename for a bundled file: no path, no traversal, no NUL."""
+    if (not name or len(name.encode("utf-8")) > 255 or "/" in name or "\\" in name
+            or "\x00" in name or name in (".", "..") or ".." in name.split("/")):
+        raise VeilError("Each bundled file needs a simple name, with no path")
+    return name
+
+
+def _pack_bundle(named_payloads) -> bytes:
+    """BUNDLE_MAGIC + u16 count, then per file: u16 name length, name, u64 size, bytes."""
+    out = bytearray(BUNDLE_MAGIC + struct.pack(">H", len(named_payloads)))
+    for name, data in named_payloads:
+        encoded = _safe_bundle_name(name).encode("utf-8")
+        out += struct.pack(">H", len(encoded)) + encoded + struct.pack(">Q", len(data)) + data
+    return bytes(out)
+
+
+def _unpack_bundle(blob: bytes):
+    """Parse a bundle blob into [(name, data), …]. Validates names and bounds; the
+    data is untrusted, so every field is checked before use."""
+    if not blob.startswith(BUNDLE_MAGIC):
+        raise VeilError("Not an ENVY Veil bundle")
+    pos = len(BUNDLE_MAGIC)
+    if len(blob) < pos + 2:
+        raise VeilError("Truncated bundle header")
+    (count,) = struct.unpack(">H", blob[pos:pos + 2]); pos += 2
+    if count > MAX_BUNDLE_FILES:
+        raise VeilError("Bundle declares too many files")
+    files, seen = [], set()
+    for _ in range(count):
+        if len(blob) < pos + 2:
+            raise VeilError("Truncated bundle")
+        (nlen,) = struct.unpack(">H", blob[pos:pos + 2]); pos += 2
+        if len(blob) < pos + nlen + 8:
+            raise VeilError("Truncated bundle")
+        name = _safe_bundle_name(blob[pos:pos + nlen].decode("utf-8", "strict")); pos += nlen
+        (size,) = struct.unpack(">Q", blob[pos:pos + 8]); pos += 8
+        if len(blob) < pos + size:
+            raise VeilError("Truncated bundle")
+        data = blob[pos:pos + size]; pos += size
+        if name in seen:
+            raise VeilError("Duplicate file name in bundle")
+        seen.add(name)
+        files.append((name, data))
+    return files
 
 
 def _embed_into(cover: bytearray, framed: bytes):
@@ -206,43 +255,87 @@ def capacity(path) -> dict:
 
 # --- Public operations -------------------------------------------------------
 
-def hide(carrier, payload_file, destination, secret):
-    """Encrypt ``payload_file`` and hide it in ``carrier``; write a new carrier file."""
-    check_passphrase(secret)
+def _embed(carrier, destination, payload, secret):
+    """Encrypt the payload bytes and hide them in the carrier; write a new carrier.
+    Returns (kind, framed_byte_count). Shared by hide and hide_many."""
     kind = _carrier_kind(carrier)
     out_suffix = Path(destination).suffix.lower()
     if out_suffix not in IMAGE_SUFFIXES + AUDIO_SUFFIXES:
         raise VeilError("Output must be a lossless PNG, BMP or WAV file")
     if (kind == "image") != (out_suffix in IMAGE_SUFFIXES):
         raise VeilError("Output carrier type must match the input carrier type")
-    payload = read_regular(payload_file, MAX_PAYLOAD)
-    if not payload:
-        raise VeilError("The payload file is empty")
     framed = _frame(encrypt_bytes(payload, secret))
-
     if kind == "image":
         plane, size = _load_image_plane(carrier)
         _embed_into(plane, framed)
-        out_format = "PNG" if out_suffix == ".png" else "BMP"
-        _save_image_plane(destination, plane, size, out_format)
+        _save_image_plane(destination, plane, size, "PNG" if out_suffix == ".png" else "BMP")
     else:
         plane, params = _load_audio_plane(carrier)
         _embed_into(plane, framed)
         _save_audio_plane(destination, plane, params)
+    return kind, len(framed)
+
+
+_LOSSLESS_NOTE = ("The hidden data is AES-256-GCM encrypted. Keep the output lossless — "
+                  "re-saving it as a lossy format (JPEG, MP3, MP4) destroys the payload.")
+
+
+def hide(carrier, payload_file, destination, secret):
+    """Encrypt ``payload_file`` and hide it in ``carrier``; write a new carrier file."""
+    check_passphrase(secret)
+    payload = read_regular(payload_file, MAX_PAYLOAD)
+    if not payload:
+        raise VeilError("The payload file is empty")
+    kind, framed = _embed(carrier, destination, payload, secret)
     return {"output": str(destination), "kind": kind, "payload_bytes": len(payload),
-            "embedded_bytes": len(framed), "carrier": str(carrier),
-            "note": "The hidden data is AES-256-GCM encrypted. Keep the output lossless — "
-                    "re-saving it as a lossy format (JPEG, MP3, MP4) destroys the payload."}
+            "embedded_bytes": framed, "carrier": str(carrier), "note": _LOSSLESS_NOTE}
+
+
+def hide_many(carrier, payload_files, destination, secret):
+    """Encrypt several files as one bundle and hide the bundle in ``carrier``. Reveal
+    writes them back into a new directory."""
+    check_passphrase(secret)
+    files = list(payload_files)
+    if not 1 <= len(files) <= MAX_BUNDLE_FILES:
+        raise VeilError(f"Hide between 1 and {MAX_BUNDLE_FILES} files")
+    named = []
+    for path in files:
+        p = Path(path).expanduser()
+        data = read_regular(p, MAX_PAYLOAD)
+        if not data:
+            raise VeilError(f"Payload file is empty: {p.name}")
+        named.append((_safe_bundle_name(p.name), data))
+    blob = _pack_bundle(named)
+    if len(blob) > MAX_PAYLOAD:
+        raise VeilError("The bundle exceeds the payload size ceiling")
+    kind, framed = _embed(carrier, destination, blob, secret)
+    return {"output": str(destination), "kind": kind, "files": len(named),
+            "payload_bytes": len(blob), "embedded_bytes": framed, "carrier": str(carrier),
+            "note": _LOSSLESS_NOTE}
 
 
 def reveal(carrier, destination, secret):
-    """Extract and decrypt a payload hidden in ``carrier``; write a new file."""
+    """Extract and decrypt a payload hidden in ``carrier``. A single file is written
+    to ``destination``; a multi-file bundle is written into ``destination`` as a new
+    directory (never overwriting)."""
     check_passphrase(secret)
     kind = _carrier_kind(carrier)
     plane = _load_image_plane(carrier)[0] if kind == "image" else _load_audio_plane(carrier)[0]
     payload = decrypt_bytes(_extract_framed(plane), secret)
+    if payload.startswith(BUNDLE_MAGIC):
+        items = _unpack_bundle(payload)
+        folder = Path(destination).expanduser()
+        try:
+            os.mkdir(folder, 0o700)          # fails if it exists → never overwrite
+        except FileExistsError:
+            raise VeilError(f"Refusing to write a bundle into an existing path: {folder}") from None
+        for name, data in items:
+            new_file(folder / name, data)
+        return {"output": str(folder), "kind": kind, "bundle": True,
+                "files": [name for name, _ in items],
+                "note": "A successful decrypt authenticates the bundle; it does not reveal who hid it."}
     new_file(destination, payload)
-    return {"output": str(destination), "kind": kind, "payload_bytes": len(payload),
+    return {"output": str(destination), "kind": kind, "bundle": False, "payload_bytes": len(payload),
             "note": "A successful decrypt authenticates the payload; it does not reveal who hid it."}
 
 

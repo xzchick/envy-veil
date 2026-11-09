@@ -11,7 +11,7 @@ import json
 import sys
 
 from . import __version__
-from .core import VeilError, capacity, check_passphrase, hide, inspect, reveal
+from .core import VeilError, capacity, check_passphrase, hide, hide_many, inspect, reveal
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -29,9 +29,16 @@ def build_parser() -> argparse.ArgumentParser:
     h.add_argument("payload", help="the file to hide")
     h.add_argument("destination", help="a new carrier file to write; never overwritten")
 
+    hm = commands.add_parser("hide-many", help="encrypt several files as one bundle and hide them")
+    hm.add_argument("carrier", help="a lossless PNG, BMP or WAV carrier")
+    hm.add_argument("destination", help="a new carrier file to write; never overwritten")
+    hm.add_argument("--file", action="append", required=True, dest="files", metavar="PATH",
+                    help="a file to include in the bundle (repeatable)")
+
     r = commands.add_parser("reveal", help="extract and decrypt a hidden payload")
     r.add_argument("carrier", help="a carrier that holds a Veil payload")
-    r.add_argument("destination", help="a new file for the recovered payload; never overwritten")
+    r.add_argument("destination",
+                   help="a new file for a single payload, or a new directory for a multi-file bundle")
 
     cap = commands.add_parser("capacity", help="show how many bytes a carrier can hide (read-only)")
     cap.add_argument("carrier")
@@ -56,9 +63,20 @@ def _run(args) -> int:
         print(f"hid {result['payload_bytes']} bytes → {result['output']} ({result['kind']})")
         print(result["note"])
         return 0
+    if args.command == "hide-many":
+        result = hide_many(args.carrier, args.files, args.destination, _passphrase(confirm=True))
+        print(f"hid {result['files']} file(s), {result['payload_bytes']} bytes → "
+              f"{result['output']} ({result['kind']})")
+        print(result["note"])
+        return 0
     if args.command == "reveal":
         result = reveal(args.carrier, args.destination, _passphrase())
-        print(f"revealed {result['payload_bytes']} bytes → {result['output']}")
+        if result["bundle"]:
+            print(f"revealed {len(result['files'])} file(s) → {result['output']}/")
+            for name in result["files"]:
+                print(f"  {name}")
+        else:
+            print(f"revealed {result['payload_bytes']} bytes → {result['output']}")
         return 0
     if args.command == "capacity":
         print(json.dumps(capacity(args.carrier), indent=2))
