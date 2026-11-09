@@ -136,5 +136,55 @@ class VeilTest(unittest.TestCase):
             core.hide(png, empty, self.dir / "o.png", self.SECRET)
 
 
+    # ----- multi-file bundles (v0.2) -----------------------------------
+    def test_bundle_pack_unpack_round_trip(self):
+        named = [("a.txt", b"alpha"), ("two.bin", b"\x00\x01two")]
+        blob = core._pack_bundle(named)
+        self.assertTrue(blob.startswith(core.BUNDLE_MAGIC))
+        self.assertEqual(core._unpack_bundle(blob), named)
+
+    def test_unpack_rejects_unsafe_names(self):
+        import struct
+        with self.assertRaises(core.VeilError):
+            core._pack_bundle([("../escape", b"x")])
+        bad = (core.BUNDLE_MAGIC + struct.pack(">H", 1) + struct.pack(">H", 4) + b"/etc"
+               + struct.pack(">Q", 1) + b"x")
+        with self.assertRaises(core.VeilError):
+            core._unpack_bundle(bad)
+
+    def test_hide_many_and_reveal_bundle_wav(self):
+        wav = self.dir / "cover.wav"; make_wav(wav, 60000)
+        f1 = self.dir / "one.txt"; f1.write_bytes(b"first file")
+        f2 = self.dir / "two.bin"; f2.write_bytes(b"\x00second\xff")
+        out = self.dir / "veiled.wav"
+        res = core.hide_many(wav, [f1, f2], out, self.SECRET)
+        self.assertEqual(res["files"], 2)
+        recovered = self.dir / "recovered"                  # a new directory
+        rr = core.reveal(out, recovered, self.SECRET)
+        self.assertTrue(rr["bundle"])
+        self.assertEqual(sorted(rr["files"]), ["one.txt", "two.bin"])
+        self.assertEqual((recovered / "one.txt").read_bytes(), b"first file")
+        self.assertEqual((recovered / "two.bin").read_bytes(), b"\x00second\xff")
+
+    def test_reveal_bundle_refuses_existing_path(self):
+        wav = self.dir / "cover.wav"; make_wav(wav, 60000)
+        f1 = self.dir / "one.txt"; f1.write_bytes(b"x")
+        out = self.dir / "veiled.wav"
+        core.hide_many(wav, [f1], out, self.SECRET)
+        existing = self.dir / "existing"; existing.mkdir()
+        with self.assertRaises(core.VeilError):
+            core.reveal(out, existing, self.SECRET)
+
+    def test_single_hide_still_reveals_as_single(self):
+        wav = self.dir / "cover.wav"; make_wav(wav, 40000)
+        payload = self.dir / "p.txt"; payload.write_bytes(b"solo payload")
+        out = self.dir / "v.wav"
+        core.hide(wav, payload, out, self.SECRET)
+        rec = self.dir / "rec.txt"
+        rr = core.reveal(out, rec, self.SECRET)
+        self.assertFalse(rr["bundle"])
+        self.assertEqual(rec.read_bytes(), b"solo payload")
+
+
 if __name__ == "__main__":
     unittest.main()
