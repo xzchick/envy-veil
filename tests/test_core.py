@@ -42,6 +42,30 @@ class VeilTest(unittest.TestCase):
         with self.assertRaises(VeilError):
             core.hide(png, payload, self.dir / "out.png", b"tooshort")
 
+    # ----- capacity warnings (v0.2) ------------------------------------
+    def test_capacity_low_warning(self):
+        tiny = self.dir / "tiny.png"; make_png(tiny, 8, 8)
+        rep = core.capacity(tiny)
+        self.assertTrue(rep["low_capacity"])
+        self.assertIn("very little", rep["warning"])
+
+    def test_capacity_payload_fit_and_fill(self):
+        png = self.dir / "c.png"; make_png(png, 128, 128)
+        base = core.capacity(png)
+        cap = base["max_payload_bytes"]
+        self.assertFalse(base["low_capacity"])
+        self.assertEqual(base["warning"], "")
+        full = core.capacity(png, payload_bytes=cap)
+        self.assertTrue(full["fits"])
+        self.assertEqual(full["used_pct"], 100.0)
+        self.assertIn("detect", full["warning"])          # high-fill detectability note
+        over = core.capacity(png, payload_bytes=cap + 1)
+        self.assertFalse(over["fits"])
+        self.assertIn("not fit", over["warning"])
+        light = core.capacity(png, payload_bytes=max(1, cap // 10))
+        self.assertTrue(light["fits"])
+        self.assertEqual(light["warning"], "")            # comfortable fill, no warning
+
     # ----- image round trip --------------------------------------------
     def test_hide_and_reveal_image(self):
         png = self.dir / "cover.png"; make_png(png, 128, 128)

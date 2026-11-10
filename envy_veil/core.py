@@ -238,8 +238,17 @@ def _save_audio_plane(path, frames, params):
     return new_file(path, stream.getvalue())
 
 
-def capacity(path) -> dict:
-    """How many payload bytes this carrier can hold (after the header)."""
+LOW_CAPACITY_BYTES = 512
+HIGH_FILL_PCT = 90
+
+
+def capacity(path, payload_bytes=None) -> dict:
+    """How many payload bytes this carrier can hold (after the header).
+
+    Flags a carrier whose capacity is very low, and — when ``payload_bytes`` is given —
+    whether the payload fits and how full it would leave the carrier. A high fill makes
+    LSB steganography easier to detect, so the warning nudges toward a larger carrier.
+    """
     kind = _carrier_kind(path)
     if kind == "image":
         plane, _ = _load_image_plane(path)
@@ -249,8 +258,26 @@ def capacity(path) -> dict:
     usable = max(0, slots // 8 - len(HEADER))
     # Encryption adds a fixed overhead (magic + salt + nonce + tag = 11+16+12+16).
     overhead = len(MAGIC) + 16 + 12 + 16
-    return {"carrier": str(path), "kind": kind, "bit_slots": slots,
-            "max_framed_bytes": slots // 8, "max_payload_bytes": max(0, usable - overhead)}
+    max_payload = max(0, usable - overhead)
+    result = {"carrier": str(path), "kind": kind, "bit_slots": slots,
+              "max_framed_bytes": slots // 8, "max_payload_bytes": max_payload,
+              "low_capacity": max_payload < LOW_CAPACITY_BYTES}
+    notes = []
+    if result["low_capacity"]:
+        notes.append(f"This carrier can hide only {max_payload} bytes — very little. Choose a "
+                     "larger lossless carrier for anything beyond a tiny payload.")
+    if payload_bytes is not None:
+        fits = payload_bytes <= max_payload
+        used_pct = round(100.0 * payload_bytes / max_payload, 1) if max_payload else None
+        result.update(payload_bytes=payload_bytes, fits=fits, used_pct=used_pct)
+        if not fits:
+            notes.append(f"The payload ({payload_bytes} bytes) is larger than the capacity "
+                         f"({max_payload} bytes) — it will not fit.")
+        elif used_pct is not None and used_pct >= HIGH_FILL_PCT:
+            notes.append(f"The payload fills {used_pct}% of the carrier. A high fill makes LSB "
+                         "steganography easier to detect; a larger carrier conceals it better.")
+    result["warning"] = " ".join(notes)
+    return result
 
 
 # --- Public operations -------------------------------------------------------
