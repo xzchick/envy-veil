@@ -8,6 +8,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
 
 from . import __version__
@@ -42,6 +43,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     cap = commands.add_parser("capacity", help="show how many bytes a carrier can hide (read-only)")
     cap.add_argument("carrier")
+    cap.add_argument("--payload", default=None, metavar="FILE",
+                     help="also check whether this payload fits and how full it would leave the carrier")
 
     insp = commands.add_parser("inspect", help="report whether a carrier holds a payload (read-only)")
     insp.add_argument("carrier")
@@ -79,8 +82,12 @@ def _run(args) -> int:
             print(f"revealed {result['payload_bytes']} bytes → {result['output']}")
         return 0
     if args.command == "capacity":
-        print(json.dumps(capacity(args.carrier), indent=2))
-        return 0
+        payload_bytes = os.path.getsize(args.payload) if args.payload else None
+        report = capacity(args.carrier, payload_bytes=payload_bytes)
+        print(json.dumps(report, indent=2))
+        if report["warning"]:
+            print(report["warning"], file=sys.stderr)
+        return 1 if (report.get("fits") is False or report["low_capacity"]) else 0
     if args.command == "inspect":
         print(json.dumps(inspect(args.carrier), indent=2))
         return 0
