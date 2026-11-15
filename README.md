@@ -154,6 +154,10 @@ CI runs all of this on Ubuntu, Windows and macOS for every push. Regenerate the 
 
 Security policy and private vulnerability reporting: **[SECURITY.md](SECURITY.md)**. What ENVY Veil does and does not protect against: **[THREAT_MODEL.md](THREAT_MODEL.md)**.
 
+## Roadmap
+
+Planned work for **v0.3** — signed releases, PyPI, and a lossy-safe JPEG/DCT carrier mode — is tracked in [#7](https://github.com/xzchick/envy-veil/issues/7).
+
 ## The ENVY BLACK VEIL suite
 
 ENVY Veil is one of eleven standalone apps from **ENVY BLACK VEIL** — small native desktop tools that are offline by design: no network, no accounts, no telemetry, everything encrypted at rest.
